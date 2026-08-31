@@ -1,0 +1,115 @@
+#include "fs.h"
+
+
+#include <cstring>
+
+//  TODO: 
+//  implement special directory bit to differentiate dir vs file inode
+//  ONLY ONE OPEN SYSCALL , ONCE When constructing FS, CLOSE WHEN DESTRUCTING FD member variable
+//  OFFSET OVERFLOWS WITH u32
+//  REFACTOR CREATE_DIR 
+//
+
+void FS::mkdir(std::string path_name)
+{
+	// parse, directories to traverse inode from root
+
+	std::string full_path = make_path(path_name);
+	auto path_parts = split_path(full_path);
+
+	// traverse
+	
+	std::string name;
+	auto target_parent = resolve_parent(path_parts, name);
+	if (!target_parent) { fprintf(stderr, "mkdir: invalid path\n"); return; }
+
+	if (find_in_dir(target_parent.value(), name))
+	{
+		fprintf(stderr, "mkdir: directory already exists\n");
+		return;
+	}
+	if (!create_dir(target_parent.value(), name))
+	{
+		fprintf(stderr, "mkdir: error creating directory\n");
+		return;
+	}
+	sync();
+	// ex. /root/etc
+}
+
+void FS::ls(std::string path_name)
+{
+	std::string full_path = make_path(path_name);
+	auto path_parts = split_path(full_path);
+
+	u32 target = 0; // default for root
+	
+	if (!path_parts.empty())
+	{
+		std::string name;
+		auto target_parent = resolve_parent(path_parts, name);
+		if (!target_parent) { fprintf(stderr, "ls: invalid path\n"); return; }
+
+		auto target_inode = find_in_dir(target_parent.value(), name);
+		if (!target_inode) { fprintf(stderr, "ls: no such directory\n"); return; }
+		target = *target_inode;
+	}
+	// out put target directories
+	
+	auto meta = read_inode_meta(target);
+	if (!meta) { fprintf(stderr, "ls: unable to read directory metadata\n"); return; }
+	auto data = read_inode_data(meta);
+	if (!data) { fprintf(stderr, "ls: unable to read directory data\n"); return;}
+
+	std::vector<dir_ent> directory_entries = data_parse_dirs(data.value());
+	for (auto &entry : directory_entries)
+	{
+		printf("%u, %s\n", entry.inode_num, entry.name);
+	}
+}
+
+// from current directory m_curr_dir, traverse to path_name
+// later on save curr dir inode num to remove need to traverse from root
+void FS::cd(std::string path_name)
+{
+	//traverse
+	if (path_name.empty()) { m_curr_dir = "/"; }
+	std::string full_path = make_path(path_name);
+	auto path_parts = split_path(full_path);
+
+	if (path_parts.empty())
+	{
+		m_curr_dir = "/";
+		return;
+	}
+
+	std::string name;
+	auto target_parent = resolve_parent(path_parts, name);
+
+	if (!target_parent) { fprintf(stderr, "mkdir: invalid path\n"); return; }
+	// set curr dir or print error0
+	if (find_in_dir(target_parent.value(), name)) { m_curr_dir = full_path; }
+	else{ fprintf(stderr, "cd: path not found\n"); return; }
+
+}
+
+void FS::rmdir(std::string path_name)
+{
+	if (path_name.empty()) { fprintf(stderr, "missing operand\n"); return; }
+
+	std::string full_path = make_path(path_name);
+
+	if (full_path == "/") { fprintf(stderr, "cannot delete root\n"); return; }
+	if (full_path == m_curr_dir) { fprintf(stderr, "cannot remove current directory\n"); return; }
+
+	// refuse if deleting a descendant of current directory
+	if (m_curr_dir.compare(0, full_path.size(), full_path) == 0){ fprintf(stderr, "cannot delete descendent of current directory\n"); return; }
+
+	auto path_parts = split_path(full_path);
+	std::string name;
+	auto target_parent = resolve_parent(path_parts, name);
+	if (!target_parent) { fprintf(stderr, "rmdir: invalid path\n"); }
+
+	rm_inode(target_parent.value(), name);
+}
+
