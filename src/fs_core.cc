@@ -10,11 +10,11 @@
 //  REFACTOR CREATE_DIR 
 //
 
-void FS::mkdir(std::string path_name)
+void FS::mkdir(std::string path)
 {
 	// parse, directories to traverse inode from root
 
-	std::string full_path = make_path(path_name);
+	std::string full_path = make_path(path);
 	auto path_parts = split_path(full_path);
 
 	// traverse
@@ -37,9 +37,9 @@ void FS::mkdir(std::string path_name)
 	// ex. /root/etc
 }
 
-void FS::ls(std::string path_name)
+void FS::ls(std::string path)
 {
-	std::string full_path = make_path(path_name);
+	std::string full_path = make_path(path);
 	auto path_parts = split_path(full_path);
 
 	u32 target = 0; // default for root
@@ -61,20 +61,20 @@ void FS::ls(std::string path_name)
 	auto data = read_inode_data(meta);
 	if (!data) { fprintf(stderr, "ls: unable to read directory data\n"); return;}
 
-	std::vector<dir_ent> directory_entries = data_parse_dirs(data.value());
+	std::vector<entry_t> directory_entries = data_parse_dirs(data.value());
 	for (auto &entry : directory_entries)
 	{
 		printf("%u, %s\n", entry.inode_num, entry.name);
 	}
 }
 
-// from current directory m_curr_dir, traverse to path_name
+// from current directory m_curr_dir, traverse to path
 // later on save curr dir inode num to remove need to traverse from root
-void FS::cd(std::string path_name)
+void FS::cd(std::string path)
 {
 	//traverse
-	if (path_name.empty()) { m_curr_dir = "/"; }
-	std::string full_path = make_path(path_name);
+	if (path.empty()) { m_curr_dir = "/"; }
+	std::string full_path = make_path(path);
 	auto path_parts = split_path(full_path);
 
 	if (path_parts.empty())
@@ -93,11 +93,11 @@ void FS::cd(std::string path_name)
 
 }
 
-void FS::rmdir(std::string path_name)
+void FS::rmdir(std::string path)
 {
-	if (path_name.empty()) { fprintf(stderr, "missing operand\n"); return; }
+	if (path.empty()) { fprintf(stderr, "missing operand\n"); return; }
 
-	std::string full_path = make_path(path_name);
+	std::string full_path = make_path(path);
 
 	if (full_path == "/") { fprintf(stderr, "cannot delete root\n"); return; }
 	if (full_path == m_curr_dir) { fprintf(stderr, "cannot remove current directory\n"); return; }
@@ -110,6 +110,29 @@ void FS::rmdir(std::string path_name)
 	auto target_parent = resolve_parent(path_parts, name);
 	if (!target_parent) { fprintf(stderr, "rmdir: invalid path\n"); }
 
-	rm_inode(target_parent.value(), name);
+	if (rm_inode(target_parent.value(), name)) { sync(); };
+}
+
+void FS::touch(std::string path)
+{
+	if (path.empty()) { fprintf(stderr, "touch: missing operand\n"); return; }
+	std::string full_path = make_path(path);
+	auto path_parts = split_path(full_path);
+
+	std::string name;
+	auto target_parent = resolve_parent(path_parts, name);
+	if (!target_parent) { fprintf(stderr, "file: invalid path\n"); return; }
+
+	if (find_in_dir(target_parent.value(), name))
+	{
+		fprintf(stderr, "touch: file already exists\n");
+		return;
+	}
+	if (!create_file(target_parent.value(), name))
+	{
+		fprintf(stderr, "touch: error creating file\n");
+		return;
+	}
+	sync();
 }
 

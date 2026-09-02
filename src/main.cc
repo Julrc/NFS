@@ -321,7 +321,13 @@ int main(int argc, char **argv)
 			if (args.size() > 1) { path_name = args[1]; }
 			File_system.cd(path_name);
 		}
-		else if (cmd == "touch") { std::cout << "touch\n"; }
+		else if (cmd == "touch")
+		{ 
+			if (args.size() != 2) { continue; }
+			std::string path_name = args[1];
+			File_system.touch(path_name);
+			std::cout << "touch\n"; 
+		}
 		else if (cmd == "unlink") { std::cout << "unlink\n"; }
 		else if (cmd == "rm")
 		{

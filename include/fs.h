@@ -18,7 +18,7 @@ using u64 = std::uint64_t;
 constexpr u32 MAGIC_NUMBER{0xF008DEE8};
 constexpr u32 NUM_DIRECT_PTRS{15};
 
-struct super_block
+struct super_block_t
 {
 	u64 sz;
 	u32 magic_number;
@@ -31,7 +31,7 @@ struct super_block
 };
 
 // 128 bytes
-struct inode
+struct inode_t
 {
 	u32 size; 
 	u32 time; // last access
@@ -48,10 +48,11 @@ struct inode
 	u16 uid; // Owner
 	u16 gid; // group
 	u16 links_count; // hard link reference count
-	u8 padding[28];
+	u8 type;
+	u8 padding[27];
 };
 
-struct dir_ent
+struct entry_t 
 {
 	u32 inode_num;
 	char name[32];
@@ -126,23 +127,23 @@ class FS
 private:
 	std::string m_name;
 	std::string m_curr_dir;
-	super_block sb;
+	super_block_t sb;
 	Bitmap inode_bitmap;
 	Bitmap data_bitmap;
 
 	std::optional<std::vector<u8>> read_block(const size_t offset);
-	std::optional<inode> read_inode_meta(const u32 inode_num);
-	std::optional<std::vector<u8>> read_inode_data(std::optional<inode> inode_meta);
+	std::optional<inode_t> read_inode_meta(const u32 inode_num);
+	std::optional<std::vector<u8>> read_inode_data(std::optional<inode_t> inode_meta);
 
 	bool write_block(const size_t offset, const u8 *data, const int n);
-	bool write_inode_meta(u32 inode_num, const inode &metadata);
+	bool write_inode_meta(u32 inode_num, const inode_t &metadata);
 	bool write_inode_data(const u32 inode_num, const std::vector<u8> &data);
 
 	bool flush_bitmap(Bitmap &bm, u32 block_offset);
 	bool flush_sb();
 	bool sync();
 
-	std::vector<dir_ent> data_parse_dirs(const std::vector<u8>& data_bytes);
+	std::vector<entry_t> data_parse_dirs(const std::vector<u8>& data_bytes);
 
 	void free_data_block(size_t block) { data_bitmap.unset_bit(block); }
 	void free_inode(u32 inode_num) { inode_bitmap.unset_bit(inode_num); }
@@ -160,11 +161,12 @@ private:
 	std::optional<u32> resolve_parent(const std::vector<std::string>& parts, std::string& last);
 
 	std::optional<u32> create_dir(u32 inode_num, std::string dir_name);
+	std::optional<u32> create_file(u32 inode_num, std::string file_name);
 
 	std::string normalize(std::string path_name);
 	std::string make_path(std::string path_name);
 
-	void free_inode_data(inode& target_inode);
+	void free_inode_data(inode_t& target_inode);
 
 	bool free_subtree(u32 inode);
 	bool rm_inode(u32 target_parent, std::string rm_name);
@@ -219,10 +221,11 @@ public:
 		close(fd);
 	}
 
-	void mkdir(std::string path_name);
-	void ls(std::string path_name);
-	void cd(std::string path_name);
-	void rmdir(std::string path_name);
+	void mkdir(std::string path);
+	void ls(std::string path);
+	void cd(std::string path);
+	void rmdir(std::string path);
+	void touch(std::string path);
 
 	std::string get_curr_dir() const { return m_curr_dir; }
 	void print_superblock();

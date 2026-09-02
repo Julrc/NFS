@@ -1,7 +1,6 @@
 #include "fs.h"
 
 #include <cstring>
-#include <stack>
 
 std::optional<std::vector<u8>> FS::read_block(const size_t offset)
 {
@@ -22,18 +21,18 @@ std::optional<std::vector<u8>> FS::read_block(const size_t offset)
 	return buf;
 }
 
-std::optional<inode> FS::read_inode_meta(const u32 inode_num)
+std::optional<inode_t> FS::read_inode_meta(const u32 inode_num)
 {
-	inode new_inode = {};
+	inode_t new_inode = {};
 
 	int fd = open(m_name.c_str(), O_RDONLY);
 	if (fd < 0) { perror("read_inode_meta: Error opening fs: "); return std::nullopt; }
 
-	ssize_t bytes_read = pread(fd, &new_inode, sizeof(inode), (static_cast<off_t>(sb.inode_table_offs) * sb.block_size) + (inode_num * sizeof(inode)));
+	ssize_t bytes_read = pread(fd, &new_inode, sizeof(inode_t), (static_cast<off_t>(sb.inode_table_offs) * sb.block_size) + (inode_num * sizeof(inode_t)));
 
 	close(fd);
 
-	if (bytes_read < 0 || ((size_t)bytes_read != sizeof(inode)))
+	if (bytes_read < 0 || ((size_t)bytes_read != sizeof(inode_t)))
 	{
 		fprintf(stderr, "read_inode_meta: Error reading inode metedata\n");
 		return std::nullopt;
@@ -43,7 +42,7 @@ std::optional<inode> FS::read_inode_meta(const u32 inode_num)
 }
 
 
-std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode> inode_meta)
+std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode_t> inode_meta)
 {
 
 	int fd = open(m_name.c_str(), O_RDONLY);
@@ -101,12 +100,12 @@ bool FS::write_block(const size_t offset_blocks, const u8 *src, const int n)
 	return true;
 }
 
-bool FS::write_inode_meta(u32 inode_num, const inode &metadata)
+bool FS::write_inode_meta(u32 inode_num, const inode_t &metadata)
 {
 	int fd = open(m_name.c_str(), O_RDWR);
 	if (fd < 0) { perror("write_inode_meta; failed to open file"); return false; }
 
-	off_t offset = static_cast<u64>(sb.inode_table_offs) * sb.block_size + inode_num * sizeof(inode);
+	off_t offset = static_cast<u64>(sb.inode_table_offs) * sb.block_size + inode_num * sizeof(inode_t);
 	if (pwrite(fd, &metadata, sizeof(metadata), offset) != (ssize_t)sizeof(metadata))
 	{
 		fprintf(stderr, "write_inode_meta: failed to write metadata\n");
@@ -205,15 +204,15 @@ bool FS::sync()
 	return ok;
 }
 
-std::vector<dir_ent> FS::data_parse_dirs(const std::vector<u8> &data_bytes)
+std::vector<entry_t> FS::data_parse_dirs(const std::vector<u8> &data_bytes)
 {
 
-	std::vector<dir_ent> data_pairs;
+	std::vector<entry_t> data_pairs;
 
-	for (size_t offs{}; offs + sizeof(dir_ent) <= data_bytes.size(); offs += sizeof(dir_ent))
+	for (size_t offs{}; offs + sizeof(entry_t) <= data_bytes.size(); offs += sizeof(entry_t))
 	{
-		dir_ent curr_dir = {};
-		std::memcpy(&curr_dir, data_bytes.data() + offs, sizeof(dir_ent));
+		entry_t curr_dir = {};
+		std::memcpy(&curr_dir, data_bytes.data() + offs, sizeof(entry_t));
 		data_pairs.push_back(curr_dir);
 	}
 
@@ -289,14 +288,14 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 	auto inode_data = read_inode_data(inode_metadata);
 	if (!inode_data) { fprintf(stderr, "create_dir: error reading inode data\n"); return std::nullopt; }
 
-	std::vector<dir_ent>parent_dir_entries = data_parse_dirs(inode_data.value());
-	dir_ent new_entry = { .inode_num = new_inode_num.value() , .name = {}};
+	std::vector<entry_t>parent_entries = data_parse_dirs(inode_data.value());
+	entry_t new_entry = { .inode_num = new_inode_num.value() , .name = {}};
 	std::strncpy(new_entry.name, dir_name.c_str(), sizeof(new_entry.name) - 1);
 	new_entry.name[sizeof(new_entry.name) - 1] = '\0';
 
-	parent_dir_entries.push_back(new_entry);
-	std::vector<u8> data_bytes(parent_dir_entries.size() * sizeof(dir_ent));
-	std::memcpy(data_bytes.data(), parent_dir_entries.data(), data_bytes.size());
+	parent_entries.push_back(new_entry);
+	std::vector<u8> data_bytes(parent_entries.size() * sizeof(entry_t));
+	std::memcpy(data_bytes.data(), parent_entries.data(), data_bytes.size());
 
 	// edit link count
 	inode_metadata->links_count++;
@@ -313,15 +312,15 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 	}
 
 	// write new directory's inode metadata
-	const dir_ent new_inode_dir_entries[] = 
+	const entry_t new_inode_entries[] = 
 	{
 			{ .inode_num = new_inode_num.value(), .name = "." },
 			{ .inode_num = inode_num, .name = ".." },
 	};
 
-	u32 new_inode_sz = sizeof(new_inode_dir_entries);
+	u32 new_inode_sz = sizeof(new_inode_entries);
 	u32 new_inode_blocks = (new_inode_sz + sb.block_size - 1) / sb.block_size;
-	inode new_inode_st =
+	inode_t new_inode_st =
 	{
 		.size = new_inode_sz,
 		.time = 0,
@@ -341,15 +340,53 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 
 	write_inode_meta(new_inode_num.value(), new_inode_st);
 
-	std::vector<u8> new_inode_dir_entries_bytes(sizeof(new_inode_dir_entries));
-	std::memcpy(new_inode_dir_entries_bytes.data(), new_inode_dir_entries, new_inode_dir_entries_bytes.size());
-	if (!write_inode_data(new_inode_num.value(), new_inode_dir_entries_bytes))
+	std::vector<u8> new_inode_entries_buff(sizeof(new_inode_entries));
+	std::memcpy(new_inode_entries_buff.data(), new_inode_entries, new_inode_entries_buff.size());
+	if (!write_inode_data(new_inode_num.value(), new_inode_entries_buff))
 	{
 		fprintf(stderr, "Failed to write inode data");
 		return std::nullopt;
 	}
 	// get a new inode number from bitmap
 	return new_inode_num;
+}
+
+bool is_dir(const inode_t& inode)
+{
+	// type 1 = dir
+	if (inode.type == 1) { return true; }
+	else { return false; }
+}
+
+/* 
+ * Create file "file_name" in dir "inode_num"
+*/
+std::optional<u32> FS::create_file(u32 inode_num, std::string file_name)
+{
+	//create new inode, read current parent directory entries
+
+	auto parent_meta = read_inode_meta(inode_num);
+	if (!parent_meta) { fprintf(stderr, "create_file: error reading parent metadata\n"); return std::nullopt; }
+
+	// check if parent is directory
+	if (!is_dir(parent_meta.value())) { fprintf(stderr, "create__file: invalid path\n"); return std::nullopt;}
+
+	auto parent_data = read_inode_data(parent_meta.value());
+	if (!parent_data) { fprintf(stderr, "create_file: error reading parent data\n"); return std::nullopt;}
+	auto parent_entries = data_parse_dirs(parent_data.value());
+
+	auto new_inode_num = inode_bitmap.alloc();
+	if (!new_inode_num) { fprintf(stderr, "create_file: error allocating inode"); return std::nullopt; }
+	entry_t new_entry = { .inode_num = new_inode_num.value(), .name = {} };
+	std::strncpy(new_entry.name, file_name.c_str(), sizeof(new_entry.name) - 1);
+	new_entry.name[sizeof(new_entry.name) - 1] = '\0'; // null char terminating
+	
+	parent_entries.push_back(new_entry);
+
+	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(entry_t));
+	std::memcpy(parent_entries_buf.data(), parent_entries.data(), parent_entries_buf.size());
+
+	write_inode_data(inode_num, parent_entries_buf);
 }
 
 // normalizes '.' and '..', folds
@@ -406,7 +443,7 @@ std::string FS::make_path(std::string path_name)
 }
 
 // doesnt zero out block ptrs array bits
-void FS::free_inode_data(inode& target_inode)
+void FS::free_inode_data(inode_t& target_inode)
 {
 	auto block_ptrs = target_inode.block_ptrs;
 
@@ -459,11 +496,10 @@ bool FS::rm_inode(u32 target_parent, std::string rm_name)
 	{
 		if (it->name == rm_name) { parent_entries.erase(it); break; }
 	}
-	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(dir_ent));
+	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(entry_t));
 	std::memcpy(parent_entries_buf.data(), parent_entries.data(), parent_entries_buf.size());
 	if (!write_inode_data(target_parent, parent_entries_buf)) { fprintf(stderr, "rm_inode: error writing inode data\n"); };
 
-	sync();
 	return true;
 }
 
