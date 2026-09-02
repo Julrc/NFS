@@ -17,6 +17,7 @@ using u64 = std::uint64_t;
 
 constexpr u32 MAGIC_NUMBER{0xF008DEE8};
 constexpr u32 NUM_DIRECT_PTRS{15};
+constexpr u32 WRT_BUF_SZ{1024};
 
 struct super_block_t
 {
@@ -161,6 +162,7 @@ private:
 	std::optional<u32> resolve_parent(const std::vector<std::string>& parts, std::string& last);
 
 	std::optional<u32> create_dir(u32 inode_num, std::string dir_name);
+	bool is_dir(const inode_t& inode);
 	std::optional<u32> create_file(u32 inode_num, std::string file_name);
 
 	std::string normalize(std::string path_name);
@@ -174,7 +176,7 @@ private:
 public:
 	FS(std::string name) : m_name{ std::move(name) }, m_curr_dir{ "/" }
 	{
-		// read superblock
+		// read superblock (mount logic, resource acquisition)
 		int fd = open(m_name.c_str(), O_RDWR);
 		if (fd < 0) { perror("openfs: open"); return; }
 
@@ -226,6 +228,8 @@ public:
 	void cd(std::string path);
 	void rmdir(std::string path);
 	void touch(std::string path);
+	void write(std::string path, std::string buf);
+	void cat(std::string path);
 
 	std::string get_curr_dir() const { return m_curr_dir; }
 	void print_superblock();

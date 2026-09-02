@@ -58,6 +58,7 @@ void FS::ls(std::string path)
 	
 	auto meta = read_inode_meta(target);
 	if (!meta) { fprintf(stderr, "ls: unable to read directory metadata\n"); return; }
+	if (!is_dir(meta.value())) { fprintf(stderr, "invalid, not a directory\n"); }
 	auto data = read_inode_data(meta);
 	if (!data) { fprintf(stderr, "ls: unable to read directory data\n"); return;}
 
@@ -85,10 +86,25 @@ void FS::cd(std::string path)
 
 	std::string name;
 	auto target_parent = resolve_parent(path_parts, name);
-
 	if (!target_parent) { fprintf(stderr, "mkdir: invalid path\n"); return; }
 	// set curr dir or print error0
-	if (find_in_dir(target_parent.value(), name)) { m_curr_dir = full_path; }
+	auto new_dir = find_in_dir(target_parent.value(), name);
+	if (new_dir)
+	{ 
+		auto new_dir_meta = read_inode_meta(new_dir.value());
+		if (new_dir_meta)
+		{
+			if (is_dir(new_dir_meta.value()))
+			{
+				m_curr_dir = full_path;
+			}
+			else
+			{
+				fprintf(stderr, "invalid, not a directory\n");
+				return;
+			}
+		}
+	}
 	else{ fprintf(stderr, "cd: path not found\n"); return; }
 
 }
@@ -136,3 +152,56 @@ void FS::touch(std::string path)
 	sync();
 }
 
+
+/*
+Writes buf into path file
+*/
+void FS::write(std::string path, std::string buf)
+{
+	if (path.empty()) { fprintf(stderr, "touch: missing operand\n"); return; }
+	std::string full_path = make_path(path);
+	auto path_parts = split_path(full_path);
+
+	std::string name;
+	auto target_parent = resolve_parent(path_parts, name);
+	if (!target_parent) { fprintf(stderr, "write: invalid path\n"); return; }
+
+	auto target = find_in_dir(target_parent.value(), name);
+	if (!target) { fprintf(stderr, "write: file does not exist\n"); return; }
+
+	auto target_meta = read_inode_meta(target.value());
+	if (is_dir(target_meta.value())) { fprintf(stderr, "unable to write to directory\n"); return; }
+	// write to file
+
+	std::vector<u8> byte_buf(buf.length());
+
+	std::memcpy(byte_buf.data(), buf.data(), byte_buf.size());
+	write_inode_data(target.value(), byte_buf);
+
+	sync();
+}
+
+void FS::cat(std::string path)
+{
+	if (path.empty()) { fprintf(stderr, "cat: missing operand\n"); return; }
+	std::string full_path = make_path(path);
+	auto path_parts = split_path(full_path);
+
+	std::string name;
+	auto target_parent = resolve_parent(path_parts, name);
+	if (!target_parent) { fprintf(stderr, "invalid path\n"); }
+
+	auto target = find_in_dir(target_parent.value(), name);
+	if (!target) { fprintf(stderr, "cat: invalid path\n"); return; }
+	auto target_meta = read_inode_meta(target.value());
+	if (!target_meta) { fprintf(stderr, "cat: read metadata\n"); return; }
+
+	auto data = read_inode_data(target_meta.value());
+
+	std::string disp_data = "";
+	std::memcpy(disp_data.data(), data.value().data(), data.value().size());
+
+	printf("%s\n", disp_data.c_str());
+
+	return;
+}

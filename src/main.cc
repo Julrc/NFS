@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <cmath>
 #include <iostream>
 #include <sstream>
@@ -81,7 +82,7 @@ int mkfs(const char* pathname, u64 sz)
 
 	// inode table offset
 	u32 inode_table_offset = data_bitmap_offset + data_bitmap_blocks;
-	u64 inode_table_sz = (u64)inode_count * sizeof(inode);
+	u64 inode_table_sz = (u64)inode_count * sizeof(inode_t);
 	u32 inode_table_blocks = INT_CEIL_DIV(inode_table_sz, block_size);
 
 	// data region offfset
@@ -90,7 +91,7 @@ int mkfs(const char* pathname, u64 sz)
 	Bitmap inode_bitmap = Bitmap(inode_count);
 	Bitmap data_bitmap = Bitmap(block_count);
 
-	super_block sb =
+	super_block_t sb =
 	{
 		.sz = sz,
 		.magic_number= MAGIC_NUMBER, 
@@ -118,7 +119,7 @@ int mkfs(const char* pathname, u64 sz)
 	// create root
 
 	// write directory entries
-	const dir_ent root_dir_entries[] = {
+	const entry_t root_dir_entries[] = {
 		{ .inode_num = 0, .name = "."},
 		{ .inode_num = 0, .name = ".."},
 	};
@@ -136,7 +137,7 @@ int mkfs(const char* pathname, u64 sz)
 	// write root inode
 	u32 root_sz = sizeof(root_dir_entries);
 	u32 root_blocks = INT_CEIL_DIV(root_sz, block_size);
-	inode root =
+	inode_t root =
 	{
 		.size = root_sz,
 		.time = 0,
@@ -151,6 +152,7 @@ int mkfs(const char* pathname, u64 sz)
 		.uid = 0,
 		.gid = 0,
 		.links_count = 2,
+		.type = 1,
 		.padding = {},
 	};
 
@@ -220,7 +222,7 @@ std::vector<std::string> tokenize(std::string line)
 int main(int argc, char **argv)
 {
 
-	static_assert(sizeof(inode) == (2 << 6));
+	static_assert(sizeof(inode_t) == (2 << 6));
 
 	if (argc == 1) { print_usage(argv[0]); return 1; }
 
@@ -305,35 +307,52 @@ int main(int argc, char **argv)
 		else if (cmd == "mkdir")
 		{ 
 			if (args.size() != 2) { continue; }
-			std::string path_name = args[1];
-			File_system.mkdir(path_name);
+			std::string path= args[1];
+			File_system.mkdir(path);
 		}
 		else if (cmd == "ls")
 		{ 
 			// handle "ls" itsself
-			std::string path_name = "";
-			if (args.size() > 1) { path_name = args[1]; }
-			File_system.ls(path_name);
+			std::string path = "";
+			if (args.size() == 2) { path = args[1]; }
+			File_system.ls(path);
 		}
 		else if (cmd == "cd")
 		{
-			std::string path_name = "";
-			if (args.size() > 1) { path_name = args[1]; }
-			File_system.cd(path_name);
+			std::string path = "";
+			if (args.size() == 2) { path = args[1]; }
+			File_system.cd(path);
 		}
 		else if (cmd == "touch")
 		{ 
 			if (args.size() != 2) { continue; }
-			std::string path_name = args[1];
-			File_system.touch(path_name);
-			std::cout << "touch\n"; 
+			std::string path = args[1];
+			File_system.touch(path);
 		}
 		else if (cmd == "unlink") { std::cout << "unlink\n"; }
 		else if (cmd == "rm")
 		{
-			std::string path_name = "";
-			if (args.size() > 1) { path_name = args[1]; }
-			File_system.rmdir(path_name);
+			std::string path = "";
+			if (args.size() == 2) { path = args[1]; }
+			File_system.rmdir(path);
+		}
+		else if (cmd == "write")
+		{
+			std::string path = "";
+			if (args.size() <= 2) { continue; }
+			path = args[1];
+			std::string buf = "";
+			for (size_t i{2}; i < args.size(); ++i)
+			{
+				buf += args[i];
+			}
+			File_system.write(path, buf);
+		}
+		else if (cmd == "cat")
+		{
+			std::string path = "";
+			if (args.size() == 2) { path = args[1]; }
+			File_system.cat(path);
 		}
 		else if (cmd == "grep") { std::cout << "grep\n"; }
 		else if (cmd == "echo") { std::cout << "echo\n"; }

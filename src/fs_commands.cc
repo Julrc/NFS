@@ -281,6 +281,7 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 {
 	auto inode_metadata = read_inode_meta(inode_num);
 	if (!inode_metadata) { fprintf(stderr, "create_dir: error reading inode metadata\n"); return std::nullopt; }
+	if (!is_dir(inode_metadata.value())) { fprintf(stderr, "invalid, not a directory\n"); return std::nullopt; }
 
 	auto new_inode_num = inode_bitmap.alloc();
 	if (!new_inode_num) { fprintf(stderr, "create_dir: error allocating inode"); return std::nullopt; }
@@ -335,6 +336,7 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 		.uid = 0,
 		.gid = 0,
 		.links_count = 2,
+		.type = 1,
 		.padding = {},
 	};
 
@@ -351,7 +353,7 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 	return new_inode_num;
 }
 
-bool is_dir(const inode_t& inode)
+bool FS::is_dir(const inode_t& inode)
 {
 	// type 1 = dir
 	if (inode.type == 1) { return true; }
@@ -371,6 +373,7 @@ std::optional<u32> FS::create_file(u32 inode_num, std::string file_name)
 	// check if parent is directory
 	if (!is_dir(parent_meta.value())) { fprintf(stderr, "create__file: invalid path\n"); return std::nullopt;}
 
+	//wrt new parent entry
 	auto parent_data = read_inode_data(parent_meta.value());
 	if (!parent_data) { fprintf(stderr, "create_file: error reading parent data\n"); return std::nullopt;}
 	auto parent_entries = data_parse_dirs(parent_data.value());
@@ -387,6 +390,31 @@ std::optional<u32> FS::create_file(u32 inode_num, std::string file_name)
 	std::memcpy(parent_entries_buf.data(), parent_entries.data(), parent_entries_buf.size());
 
 	write_inode_data(inode_num, parent_entries_buf);
+
+	// wrt new inode
+	
+	inode_t new_inode_st =
+	{
+		.size = 0,
+		.time = 0,
+		.ctime = 0,
+		.mtime = 0,
+		.dtime = 0,
+		.blocks = 0,
+		.flags = {},
+		.osd1 = 0,
+		.block_ptrs = {},
+		.mode = 0,
+		.uid = 0,
+		.gid = 0,
+		.links_count = 2,
+		.type = 0,
+		.padding = {},
+	};
+
+	write_inode_meta(new_inode_num.value(), new_inode_st);
+
+	return new_inode_num;
 }
 
 // normalizes '.' and '..', folds
