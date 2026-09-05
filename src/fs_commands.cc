@@ -32,7 +32,7 @@ std::optional<inode_t> FS::read_inode_meta(const u32 inode_num)
 	return new_inode;
 }
 
-
+/*
 std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode_t> inode_meta)
 {
 
@@ -63,6 +63,44 @@ std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode_t> inode_
 		}
 		ptr_index++;
 	}
+	return buffer;
+}
+*/
+
+std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode_t> inode_meta)
+{
+	// read inode_data_sz bytes
+	u32 inode_data_sz = inode_meta->size;
+	std::vector<u8> buffer(inode_data_sz);
+
+	u32 buffer_pos{0};
+	u32 ptr_index{0};
+
+	const u32 ptr_per_block = sb.block_size / sizeof(u32);
+	u32 total_ptrs = NUM_DIRECT_PTRS + ptr_per_block;
+
+	u32 remaining = inode_data_sz;
+
+	while (remaining)
+	{
+		if (ptr_index >= total_ptrs) { return std::nullopt; }
+
+		auto curr_block_offs = get_block(inode_meta.value(), ptr_index);
+		if (!curr_block_offs) { fprintf(stderr, "read_inode_data: error reading pointer offset\n"); return std::nullopt; }
+
+		//read 
+		//how many bytes left
+		bool read_whole_block = (remaining > sb.block_size) ? true : false;
+		const u32 read_sz = (read_whole_block) ? sb.block_size : remaining;
+
+		// read bytes, account values
+		ssize_t bytes_read = pread(m_fd, buffer.data() + buffer_pos, read_sz, static_cast<off_t>(curr_block_offs.value()) * sb.block_size);
+		buffer_pos += read_sz;
+		remaining -= read_sz;
+
+		if (bytes_read < 0 || ((size_t) bytes_read != read_sz)) { fprintf(stderr, "read_inode_data: error reading data\n"); return std::nullopt; }
+		ptr_index++;
+	}
 
 	return buffer;
 }
@@ -89,6 +127,72 @@ bool FS::write_inode_meta(u32 inode_num, const inode_t &metadata)
 	return true;
 }
 
+bool FS::zero_block(u32 block_offs)
+{
+	std::vector<u8> filler(sb.block_size, 0);
+	if (!write_block(block_offs, filler.data(), filler.size())) { fprintf(stderr, "zero_block: error writing to block\n"); return false; };
+	return true;
+}
+
+bool FS::set_block(inode_t& inode, u32 idx, u32 val)
+{	
+	if (idx < NUM_DIRECT_PTRS)
+	{
+		inode.block_ptrs[idx] = val;
+		return true;
+	}
+
+	u32 entry = (idx - NUM_DIRECT_PTRS);
+	u32 ptrs_per_block = sb.block_size / sizeof(u32);
+	if (entry >= ptrs_per_block) { fprintf(stderr, "set:block: invalid index\n"); return false; }
+
+	// read indirect bloc koffs to index into it and write to index
+	u32 indirect_block = inode.block_ptrs[NUM_DIRECT_PTRS];
+
+	if (indirect_block == 0)
+	{
+		auto new_block = alloc_data_block();
+		if (!new_block) { fprintf(stderr, "set_block: failure allocating new block\n"); return false; }
+		indirect_block = new_block.value();
+		if (!zero_block(indirect_block)) { fprintf(stderr, "error zeroing bytes\n"); return false; };
+		inode.block_ptrs[NUM_DIRECT_PTRS] = indirect_block;
+	}
+	// read block to edit block with new pointer then write back
+	auto data = read_block(indirect_block);
+	if (!data) { fprintf(stderr, "set_block: failed to read data\n"); return false; }
+
+	u32 byte_offs = entry * sizeof(u32);
+	std::memcpy(data->data() + byte_offs, &val, sizeof(u32));
+	if (!write_block(indirect_block, data->data(), data->size())) { fprintf(stderr, "set_block: write failed\n"); return false; } 
+
+	return true;
+}
+
+std::optional<u32> FS::get_block(inode_t& inode, u32 idx)
+{
+	// in direct ptrs section
+	if (idx < NUM_DIRECT_PTRS) { return inode.block_ptrs[idx]; }
+
+	// in indirect block 
+	// read INDIRECT BLOCK OFFS
+	u32 indirect_block = inode.block_ptrs[NUM_DIRECT_PTRS];
+	if (indirect_block == 0) { return 0; }
+
+	// claculate offset in indirect block
+	u32 entry = (idx - NUM_DIRECT_PTRS);
+	u32 ptrs_per_block = sb.block_size / sizeof(u32);
+	if (entry >= ptrs_per_block) { fprintf(stderr, "get_blocK: invalid index\n"); return std::nullopt; }
+
+	// read indirect block
+	auto data = read_block(indirect_block);
+	if (!data) { fprintf(stderr, "failed to read data\n"); return std::nullopt; }
+
+	u32 byte_offs = entry * sizeof(u32);
+	u32 block_addr;
+	std::memcpy(&block_addr, data->data() + byte_offs, sizeof(block_addr));
+
+	return block_addr;
+}
 
 bool FS::write_inode_data(const u32 inode_num, const std::vector<u8> &data)
 {
@@ -96,37 +200,42 @@ bool FS::write_inode_data(const u32 inode_num, const std::vector<u8> &data)
 	if (!meta) return false;
 
 	size_t blocks_needed = (data.size() + sb.block_size - 1) / sb.block_size;
-	if (blocks_needed > NUM_DIRECT_PTRS) return false;
+	const u32 ptrs_per_block = sb.block_size / sizeof(u32);
+	// only have first indirect pointer
+	const u32 total_pointers = NUM_DIRECT_PTRS + ptrs_per_block;
 
-	for (size_t i{}; i < NUM_DIRECT_PTRS; ++i)
+	if (blocks_needed > total_pointers) { fprintf(stderr, "write_inode_data: data is too big\n"); return false; };
+
+	for (size_t i{}; i < total_pointers; ++i)
 	{
+		// ignore pointer to indirect block
+		auto block = get_block(meta.value(), i);
+		if (!block) { fprintf(stderr, "error reading data\n"); return false;}
+
 		if (i < blocks_needed)
 		{
 			// alloc if needed
-			if (meta->block_ptrs[i] == 0)
+			if (block.value() == 0)
 			{
-				auto block = alloc_data_block();
+				block = alloc_data_block();
 				if (!block) { fprintf(stderr, "write_inode_data: Error allocating data block\n"); return false; }
-				meta->block_ptrs[i] = block.value();
+				set_block(meta.value(), i, block.value());
 			}
-
 			// write block's data
 			size_t pos = i * sb.block_size;
 			size_t len = std::min((size_t)sb.block_size, data.size() - pos);
-			write_block(meta->block_ptrs[i], data.data() + pos, len);
+			write_block(block.value(), data.data() + pos, len);
 		}
-
 		// block no longer needed, mark free
 		else
 		{
-			if (meta->block_ptrs[i] != 0)
+			if (block.value() != 0)
 			{
-				free_data_block(meta->block_ptrs[i]);
-				meta->block_ptrs[i] = 0;
+				free_data_block(block.value());
+				set_block(meta.value(), i, 0);
 			}
 		}
 	}
-
 	meta->size = data.size();
 	return write_inode_meta(inode_num, meta.value());
 }

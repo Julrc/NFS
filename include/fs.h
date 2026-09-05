@@ -16,7 +16,7 @@ using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
 constexpr u32 MAGIC_NUMBER{0xF008DEE8};
-constexpr u32 NUM_DIRECT_PTRS{15};
+constexpr u32 NUM_DIRECT_PTRS{14};
 constexpr u32 WRT_BUF_SZ{1024};
 
 struct super_block_t
@@ -42,7 +42,7 @@ struct inode_t
 	u32 blocks; // how many blocks allocated
 	u32 flags;
 	u32 osd1;
-	// set of disk pointers (15 total)
+	// set of disk pointers (15 total) 14 direct, 1 indirect
 	u32 block_ptrs[15];
 	//28 bytes of padding
 	u16 mode; // RWE
@@ -158,7 +158,9 @@ private:
 
 	bool write_block(const size_t offset, const u8 *data, const int n);
 	bool write_inode_meta(u32 inode_num, const inode_t &metadata);
-	u32 get_block(inode_t &inode, u32 idx, bool rd_mode);
+	bool zero_block(u32 block_offs);
+	bool set_block(inode_t& inode, u32 idx, u32 val);
+	std::optional<u32> get_block(inode_t &inode, u32 idx);
 	bool write_inode_data(const u32 inode_num, const std::vector<u8> &data);
 
 	bool flush_bitmap(Bitmap &bm, u32 block_offset);

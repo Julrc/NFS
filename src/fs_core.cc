@@ -4,11 +4,10 @@
 #include <cstring>
 
 //  TODO: 
-//  write/cat not showing spaces 
 //  DOUBLE INDIRECT POINTER
 //  OFFSET OVERFLOWS WITH u32
 //  REFACTOR CREATE_DIR 
-//
+
 
 void FS::mkdir(std::string raw_path)
 {
