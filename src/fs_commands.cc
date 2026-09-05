@@ -17,13 +17,13 @@ std::optional<std::vector<u8>> FS::read_block(const size_t offset)
 }
 
 
-std::optional<inode_t> FS::read_inode_meta(const u32 inode_num)
+std::optional<Inode_t> FS::read_inode_meta(const u32 inode_num)
 {
-	inode_t new_inode = {};
+	Inode_t new_inode = {};
+	off_t offs = (sb.inode_table_offs * sb.block_size) + (inode_num * sizeof(Inode_t));
+	ssize_t bytes_read = pread(m_fd, &new_inode, sizeof(Inode_t), offs);
 
-	ssize_t bytes_read = pread(m_fd, &new_inode, sizeof(inode_t), (static_cast<off_t>(sb.inode_table_offs) * sb.block_size) + (inode_num * sizeof(inode_t)));
-
-	if (bytes_read < 0 || ((size_t)bytes_read != sizeof(inode_t)))
+	if (bytes_read < 0 || ((size_t)bytes_read != sizeof(Inode_t)))
 	{
 		fprintf(stderr, "read_inode_meta: Error reading inode metedata\n");
 		return std::nullopt;
@@ -32,42 +32,7 @@ std::optional<inode_t> FS::read_inode_meta(const u32 inode_num)
 	return new_inode;
 }
 
-/*
-std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode_t> inode_meta)
-{
-
-	u32 inode_data_sz = inode_meta->size;
-	std::vector<u8> buffer(inode_data_sz);
-
-	u32 buffer_pos{};
-	u32 ptr_index{};
-
-	// read all data until no more one block at a time only direct pointers for now
-	while (inode_data_sz)
-	{
-		if (ptr_index >= sizeof(inode_meta->block_ptrs) / sizeof(inode_meta->block_ptrs[0])) { return std::nullopt; }
-		// read pointers
-		const u32 ptr_read_sz = (inode_data_sz > sb.block_size) ? sb.block_size : inode_data_sz;
-		
-		// read ptr_read_sz bytes at data pointer offset
-		u32 data_ptr_offs = inode_meta->block_ptrs[ptr_index];
-
-		ssize_t bytes_read = pread(m_fd, buffer.data() + buffer_pos, ptr_read_sz, static_cast<off_t>(data_ptr_offs) * sb.block_size);
-		buffer_pos += ptr_read_sz;
-		inode_data_sz -= ptr_read_sz;
-
-		if (bytes_read < 0 || ((size_t)bytes_read != ptr_read_sz))
-		{
-			fprintf(stderr, "read_inode_data: error reading data\n");
-			return std::nullopt;
-		}
-		ptr_index++;
-	}
-	return buffer;
-}
-*/
-
-std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode_t> inode_meta)
+std::optional<std::vector<u8>> FS::read_inode_data(std::optional<Inode_t> inode_meta)
 {
 	// read inode_data_sz bytes
 	u32 inode_data_sz = inode_meta->size;
@@ -94,21 +59,21 @@ std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode_t> inode_
 		const u32 read_sz = (read_whole_block) ? sb.block_size : remaining;
 
 		// read bytes, account values
-		ssize_t bytes_read = pread(m_fd, buffer.data() + buffer_pos, read_sz, static_cast<off_t>(curr_block_offs.value()) * sb.block_size);
+		off_t offs = curr_block_offs.value() * sb.block_size;
+		ssize_t bytes_read = pread(m_fd, buffer.data() + buffer_pos, read_sz, offs);
 		buffer_pos += read_sz;
 		remaining -= read_sz;
 
 		if (bytes_read < 0 || ((size_t) bytes_read != read_sz)) { fprintf(stderr, "read_inode_data: error reading data\n"); return std::nullopt; }
 		ptr_index++;
 	}
-
 	return buffer;
 }
 
-bool FS::write_block(const size_t offset_blocks, const u8 *src, const int n)
+bool FS::write_block(const size_t offset_blocks, const u8 *src, const ssize_t n)
 {
 	off_t offs = offset_blocks * sb.block_size;
-	if (pwrite(m_fd, src, n, offs) != static_cast<ssize_t>(n))
+	if (pwrite(m_fd, src, n, offs) != n)
 	{
 		fprintf(stderr, "write_block: failed to write data\n");
 		return false;
@@ -116,9 +81,10 @@ bool FS::write_block(const size_t offset_blocks, const u8 *src, const int n)
 	return true;
 }
 
-bool FS::write_inode_meta(u32 inode_num, const inode_t &metadata)
+bool FS::write_inode_meta(u32 inode_num, const Inode_t& metadata)
 {
-	off_t offset = static_cast<u64>(sb.inode_table_offs) * sb.block_size + inode_num * sizeof(inode_t);
+	off_t offset = (sb.inode_table_offs * sb.block_size) + (inode_num * sizeof(Inode_t));
+
 	if (pwrite(m_fd, &metadata, sizeof(metadata), offset) != (ssize_t)sizeof(metadata))
 	{
 		fprintf(stderr, "write_inode_meta: failed to write metadata\n");
@@ -134,7 +100,7 @@ bool FS::zero_block(u32 block_offs)
 	return true;
 }
 
-bool FS::set_block(inode_t& inode, u32 idx, u32 val)
+bool FS::set_block(Inode_t& inode, u32 idx, u32 val)
 {	
 	if (idx < NUM_DIRECT_PTRS)
 	{
@@ -168,7 +134,7 @@ bool FS::set_block(inode_t& inode, u32 idx, u32 val)
 	return true;
 }
 
-std::optional<u32> FS::get_block(inode_t& inode, u32 idx)
+std::optional<u32> FS::get_block(Inode_t& inode, u32 idx)
 {
 	// in direct ptrs section
 	if (idx < NUM_DIRECT_PTRS) { return inode.block_ptrs[idx]; }
@@ -244,8 +210,7 @@ bool FS::flush_bitmap(Bitmap& bm, u32 block_offset)
 {
 	std::vector<u8> src = bm.get_bytes();
 
-	off_t offs = static_cast<u64>(block_offset) * sb.block_size;
-
+	off_t offs = sb.block_size * block_offset;
 	if (pwrite(m_fd, src.data(), src.size(), offs) != static_cast<ssize_t>(src.size()))
 	{
 		fprintf(stderr, "error flushing bitmap\n");
@@ -257,7 +222,6 @@ bool FS::flush_bitmap(Bitmap& bm, u32 block_offset)
 bool FS::flush_sb()
 {
 	off_t offs{0};
-
 	if (pwrite(m_fd, &sb, sizeof(sb), offs) != static_cast<ssize_t>(sizeof(sb)))
 	{
 		fprintf(stderr, "error flushing superblock\n");
@@ -276,19 +240,27 @@ bool FS::sync()
 	return ok;
 }
 
-std::vector<entry_t> FS::data_parse_dirs(const std::vector<u8> &data_bytes)
+std::vector<Entry_t> FS::data_parse_dirs(const std::vector<u8> &data_bytes)
 {
 
-	std::vector<entry_t> data_pairs;
+	std::vector<Entry_t> data_pairs;
 
-	for (size_t offs{}; offs + sizeof(entry_t) <= data_bytes.size(); offs += sizeof(entry_t))
+	for (size_t offs{}; offs + sizeof(Entry_t) <= data_bytes.size(); offs += sizeof(Entry_t))
 	{
-		entry_t curr_dir = {};
-		std::memcpy(&curr_dir, data_bytes.data() + offs, sizeof(entry_t));
+		Entry_t curr_dir = {};
+		std::memcpy(&curr_dir, data_bytes.data() + offs, sizeof(Entry_t));
 		data_pairs.push_back(curr_dir);
 	}
 
 	return data_pairs;
+}
+
+std::optional<u32> FS::alloc_data_block()
+{ 
+	std::optional<u32> idx = data_bitmap.alloc(); 
+	if (!idx) return std::nullopt;
+	data_bitmap.set_bit(idx.value());
+	return data_bitmap.alloc();
 }
 
 // finds if "name" exists in dir inode: dirnode
@@ -309,7 +281,6 @@ std::optional<u32> FS::find_in_dir(u32 dirnode, const std::string& name)
 
 	return child;
 }
-
 
 // return vector of path components excluding root
 std::vector<std::string> FS::split_path(std::string path)
@@ -361,13 +332,13 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 	auto inode_data = read_inode_data(inode_metadata);
 	if (!inode_data) { fprintf(stderr, "create_dir: error reading inode data\n"); return std::nullopt; }
 
-	std::vector<entry_t>parent_entries = data_parse_dirs(inode_data.value());
-	entry_t new_entry = { .inode_num = new_inode_num.value() , .name = {}};
+	std::vector<Entry_t>parent_entries = data_parse_dirs(inode_data.value());
+	Entry_t new_entry = { .inode_num = new_inode_num.value() , .name = {}};
 	std::strncpy(new_entry.name, dir_name.c_str(), sizeof(new_entry.name) - 1);
 	new_entry.name[sizeof(new_entry.name) - 1] = '\0';
 
 	parent_entries.push_back(new_entry);
-	std::vector<u8> data_bytes(parent_entries.size() * sizeof(entry_t));
+	std::vector<u8> data_bytes(parent_entries.size() * sizeof(Entry_t));
 	std::memcpy(data_bytes.data(), parent_entries.data(), data_bytes.size());
 
 	// edit link count
@@ -383,9 +354,8 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 		fprintf(stderr, "Failed to write data");
 		return std::nullopt;
 	}
-
 	// write new directory's inode metadata
-	const entry_t new_inode_entries[] = 
+	const Entry_t new_inode_entries[] = 
 	{
 			{ .inode_num = new_inode_num.value(), .name = "." },
 			{ .inode_num = inode_num, .name = ".." },
@@ -393,7 +363,7 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 
 	u32 new_inode_sz = sizeof(new_inode_entries);
 	u32 new_inode_blocks = (new_inode_sz + sb.block_size - 1) / sb.block_size;
-	inode_t new_inode_st =
+	Inode_t new_inode_st =
 	{
 		.size = new_inode_sz,
 		.time = 0,
@@ -416,6 +386,7 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 
 	std::vector<u8> new_inode_entries_buff(sizeof(new_inode_entries));
 	std::memcpy(new_inode_entries_buff.data(), new_inode_entries, new_inode_entries_buff.size());
+
 	if (!write_inode_data(new_inode_num.value(), new_inode_entries_buff))
 	{
 		fprintf(stderr, "Failed to write inode data");
@@ -425,7 +396,7 @@ std::optional<u32> FS::create_dir(u32 inode_num, std::string dir_name)
 	return new_inode_num;
 }
 
-bool FS::is_dir(const inode_t& inode)
+bool FS::is_dir(const Inode_t& inode)
 {
 	// type 1 = dir
 	if (inode.type == 1) { return true; }
@@ -459,20 +430,20 @@ std::optional<u32> FS::create_file(u32 inode_num, std::string file_name)
 
 	auto new_inode_num = inode_bitmap.alloc();
 	if (!new_inode_num) { fprintf(stderr, "create_file: error allocating inode"); return std::nullopt; }
-	entry_t new_entry = { .inode_num = new_inode_num.value(), .name = {} };
+	Entry_t new_entry = { .inode_num = new_inode_num.value(), .name = {} };
 	std::strncpy(new_entry.name, file_name.c_str(), sizeof(new_entry.name) - 1);
 	new_entry.name[sizeof(new_entry.name) - 1] = '\0'; // null char terminating
 	
 	parent_entries.push_back(new_entry);
 
-	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(entry_t));
+	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(Entry_t));
 	std::memcpy(parent_entries_buf.data(), parent_entries.data(), parent_entries_buf.size());
 
 	write_inode_data(inode_num, parent_entries_buf);
 
 	// wrt new inode
 	
-	inode_t new_inode_st =
+	Inode_t new_inode_st =
 	{
 		.size = 0,
 		.time = 0,
@@ -549,7 +520,7 @@ std::optional<Resolved_t> FS::resolve_path(std::string &raw_path)
 
 
 // doesnt zero out block ptrs array bits
-void FS::free_inode_data(inode_t& target_inode)
+void FS::free_inode_data(Inode_t& target_inode)
 {
 	auto block_ptrs = target_inode.block_ptrs;
 
@@ -579,7 +550,6 @@ bool FS::free_subtree(u32 inode)
 			if (!free_subtree(entry.inode_num)) { return false; };
 		}
 	}
-
 	free_inode_data(meta.value());
 	free_inode(inode);
 
@@ -602,7 +572,7 @@ bool FS::rm_dir(const u32 target_parent, const u32 target)
 	{
 		if (it->inode_num== target) { parent_entries.erase(it); break; }
 	}
-	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(entry_t));
+	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(Entry_t));
 	std::memcpy(parent_entries_buf.data(), parent_entries.data(), parent_entries_buf.size());
 	if (!write_inode_data(target_parent, parent_entries_buf)) { fprintf(stderr, "rm_inode: error writing inode data\n"); return false; };
 
@@ -623,7 +593,7 @@ bool FS::rm_file(const u32 target_parent, const u32 target)
 		if (it->inode_num == target) { parent_entries.erase(it); break; }
 	}
 
-	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(entry_t));
+	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(Entry_t));
 	std::memcpy(parent_entries_buf.data(), parent_entries.data(), parent_entries_buf.size());
 	if (!write_inode_data(target_parent, parent_entries_buf)) { fprintf(stderr, "rm_file: error writing inode file\n"); return false; }
 
@@ -634,6 +604,17 @@ bool FS::rm_file(const u32 target_parent, const u32 target)
 	free_inode(target);
 
 	return true;
+}
+
+std::string FS::get_curr_dir() 
+{ 
+	std::string curr_dir = "/";
+	for (auto &p : m_cwd_parts)
+	{
+		curr_dir += p;
+		curr_dir += "/";
+	}
+	return curr_dir;
 }
 
 void FS::print_superblock()
