@@ -59,6 +59,20 @@ struct entry_t
 	char name[32];
 };
 
+struct Path_req_t
+{
+	bool absolute = false;
+	bool must_be_dir = false;
+	std::vector<std::string> path_parts;
+};
+
+struct Resolved_t
+{
+	u32 parent{0};
+	std::optional<u32> target{0};
+	std::string name{""};
+	bool must_b_dir{false};
+};
 
 class Bitmap
 {
@@ -127,17 +141,24 @@ class FS
 {
 private:
 	std::string m_name;
-	std::string m_curr_dir;
 	super_block_t sb;
 	Bitmap inode_bitmap;
 	Bitmap data_bitmap;
+	int m_fd{-1};
+	std::vector<std::string> m_cwd_parts;
+	u32 m_cwd_inode;
+
+	Path_req_t parse_path(std::string path);
+	std::optional<Resolved_t> resolve_path(std::string& raw_path);
 
 	std::optional<std::vector<u8>> read_block(const size_t offset);
 	std::optional<inode_t> read_inode_meta(const u32 inode_num);
 	std::optional<std::vector<u8>> read_inode_data(std::optional<inode_t> inode_meta);
 
+
 	bool write_block(const size_t offset, const u8 *data, const int n);
 	bool write_inode_meta(u32 inode_num, const inode_t &metadata);
+	u32 get_block(inode_t &inode, u32 idx, bool rd_mode);
 	bool write_inode_data(const u32 inode_num, const std::vector<u8> &data);
 
 	bool flush_bitmap(Bitmap &bm, u32 block_offset);
@@ -163,36 +184,34 @@ private:
 
 	std::optional<u32> create_dir(u32 inode_num, std::string dir_name);
 	bool is_dir(const inode_t& inode);
+	bool is_dir(const u32 inode);
 	std::optional<u32> create_file(u32 inode_num, std::string file_name);
-
-	std::string normalize(std::string path_name);
-	std::string make_path(std::string path_name);
 
 	void free_inode_data(inode_t& target_inode);
 
 	bool free_subtree(u32 inode);
-	bool rm_inode(u32 target_parent, std::string rm_name);
+	bool rm_dir(const u32 target_parent, const u32 target);
+	bool rm_file(const u32 target_parent, const u32 target);
 
 public:
-	FS(std::string name) : m_name{ std::move(name) }, m_curr_dir{ "/" }
+	FS(std::string name) : m_name{ std::move(name) }, m_cwd_inode{ 0 }
 	{
 		// read superblock (mount logic, resource acquisition)
 		int fd = open(m_name.c_str(), O_RDWR);
 		if (fd < 0) { perror("openfs: open"); return; }
+		m_fd = fd;
 
 		//read superblock and verify magic number
 		ssize_t bytes_read_sb = pread(fd, &sb, sizeof(sb), 0);
 		if (bytes_read_sb < 0 || (size_t)bytes_read_sb != sizeof(sb))
 		{
 			fprintf(stderr, "Error reading superblock\n");
-			close(fd);
 			return;
 		}
 
 		if (sb.magic_number != MAGIC_NUMBER)
 		{
 			fprintf(stderr, "FS does not match: bad magic number\n");
-			close(fd);
 			return;
 		}
 
@@ -202,9 +221,9 @@ public:
 		if (bytes_read_ib < 0 || ((size_t)bytes_read_ib != inode_bitmap_vec.size()))
 		{
 			fprintf(stderr, "Error reading inode bitmap\n");
-			close(fd);
 			return;
 		}
+
 		inode_bitmap.set_vector(inode_bitmap_vec, sb.inode_count);
 
 		u32 fs_block_count = sb.sz / sb.block_size;
@@ -215,23 +234,38 @@ public:
 		if (bytes_read_db < 0 || ((size_t)bytes_read_db != data_bitmap_vec.size()))
 		{
 			fprintf(stderr, "Error reading data bitmap\n");
-			close(fd);
 			return;
 		}
 		data_bitmap.set_vector(data_bitmap_vec, fs_block_count);
-
-		close(fd);
 	}
 
-	void mkdir(std::string path);
-	void ls(std::string path);
-	void cd(std::string path);
-	void rmdir(std::string path);
-	void touch(std::string path);
-	void write(std::string path, std::string buf);
-	void cat(std::string path);
+	~FS()
+	{
+		if (m_fd >= 0) { close(m_fd); }
+	}
+	FS(const FS&) = delete;
+	FS& operator=(const FS&) = delete;
+	FS(FS&& o) = delete;
+	FS& operator=(FS&& o) = delete;
 
-	std::string get_curr_dir() const { return m_curr_dir; }
+	void mkdir(std::string raw_path);
+	void ls(std::string raw_path);
+	void cd(std::string raw_path);
+	void rm(std::string raw_path);
+	void touch(std::string raw_path);
+	void write(std::string raw_path, std::string buf);
+	void cat(std::string raw_path);
+
+	std::string get_curr_dir() 
+	{ 
+		std::string curr_dir = "/";
+		for (auto &p : m_cwd_parts)
+		{
+			curr_dir += p;
+			curr_dir += "/";
+		}
+		return curr_dir;
+	}
 	void print_superblock();
 	void print_bitmaps();
 };

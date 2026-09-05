@@ -12,19 +12,6 @@
 
 #include "fs.h"
 
-
-/*
-TASKS:
-
-mkdir
-ls
-
-create/touch
-write and read
-
-unlink/rm
-*/
-
 #define INT_CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 
 constexpr u64 KiB(u64 n) { return n << 10; }
@@ -329,12 +316,11 @@ int main(int argc, char **argv)
 			std::string path = args[1];
 			File_system.touch(path);
 		}
-		else if (cmd == "unlink") { std::cout << "unlink\n"; }
 		else if (cmd == "rm")
 		{
 			std::string path = "";
 			if (args.size() == 2) { path = args[1]; }
-			File_system.rmdir(path);
+			File_system.rm(path);
 		}
 		else if (cmd == "write")
 		{
@@ -344,6 +330,7 @@ int main(int argc, char **argv)
 			std::string buf = "";
 			for (size_t i{2}; i < args.size(); ++i)
 			{
+				if (i > 2) buf += ' ';
 				buf += args[i];
 			}
 			File_system.write(path, buf);
@@ -354,9 +341,6 @@ int main(int argc, char **argv)
 			if (args.size() == 2) { path = args[1]; }
 			File_system.cat(path);
 		}
-		else if (cmd == "grep") { std::cout << "grep\n"; }
-		else if (cmd == "echo") { std::cout << "echo\n"; }
 	}
-
+	return 0;
 }
-

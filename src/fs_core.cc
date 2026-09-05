@@ -4,151 +4,122 @@
 #include <cstring>
 
 //  TODO: 
-//  implement special directory bit to differentiate dir vs file inode
-//  ONLY ONE OPEN SYSCALL , ONCE When constructing FS, CLOSE WHEN DESTRUCTING FD member variable
+//  write/cat not showing spaces 
+//  DOUBLE INDIRECT POINTER
 //  OFFSET OVERFLOWS WITH u32
 //  REFACTOR CREATE_DIR 
 //
 
-void FS::mkdir(std::string path)
+void FS::mkdir(std::string raw_path)
 {
-	// parse, directories to traverse inode from root
+	// parse, directories 
 
-	std::string full_path = make_path(path);
-	auto path_parts = split_path(full_path);
+	auto path = resolve_path(raw_path);
+	if (!path) { fprintf(stderr, "invalid path\n"); return; }
 
-	// traverse
-	
-	std::string name;
-	auto target_parent = resolve_parent(path_parts, name);
-	if (!target_parent) { fprintf(stderr, "mkdir: invalid path\n"); return; }
+	std::string name = path->name;
+	u32 target_parent = path->parent;
 
-	if (find_in_dir(target_parent.value(), name))
-	{
-		fprintf(stderr, "mkdir: directory already exists\n");
-		return;
-	}
-	if (!create_dir(target_parent.value(), name))
-	{
-		fprintf(stderr, "mkdir: error creating directory\n");
-		return;
-	}
+	if (find_in_dir(target_parent, name)) { fprintf(stderr, "mkdir: directory already exists\n"); return; }
+	if (!create_dir(target_parent, name)) { fprintf(stderr, "mkdir: error creating directory\n"); return; }
+
 	sync();
 	// ex. /root/etc
 }
 
-void FS::ls(std::string path)
+void FS::ls(std::string raw_path)
 {
-	std::string full_path = make_path(path);
-	auto path_parts = split_path(full_path);
 
-	u32 target = 0; // default for root
-	
-	if (!path_parts.empty())
-	{
-		std::string name;
-		auto target_parent = resolve_parent(path_parts, name);
-		if (!target_parent) { fprintf(stderr, "ls: invalid path\n"); return; }
+	auto path = resolve_path(raw_path);
+	if (!path) { fprintf(stderr, "invalid path\n"); return; }
 
-		auto target_inode = find_in_dir(target_parent.value(), name);
-		if (!target_inode) { fprintf(stderr, "ls: no such directory\n"); return; }
-		target = *target_inode;
-	}
+	auto target = path->target; // default for root
+	if (!target) { fprintf(stderr, "failed to find target\n"); return; }
+
 	// out put target directories
 	
-	auto meta = read_inode_meta(target);
+	auto meta = read_inode_meta(target.value());
 	if (!meta) { fprintf(stderr, "ls: unable to read directory metadata\n"); return; }
 	if (!is_dir(meta.value())) { fprintf(stderr, "invalid, not a directory\n"); }
 	auto data = read_inode_data(meta);
 	if (!data) { fprintf(stderr, "ls: unable to read directory data\n"); return;}
 
 	std::vector<entry_t> directory_entries = data_parse_dirs(data.value());
-	for (auto &entry : directory_entries)
-	{
-		printf("%u, %s\n", entry.inode_num, entry.name);
-	}
+
+	for (auto &entry : directory_entries) { printf("%u, %s\n", entry.inode_num, entry.name); }
 }
 
 // from current directory m_curr_dir, traverse to path
 // later on save curr dir inode num to remove need to traverse from root
-void FS::cd(std::string path)
+void FS::cd(std::string raw_path)
 {
-	//traverse
-	if (path.empty()) { m_curr_dir = "/"; }
-	std::string full_path = make_path(path);
-	auto path_parts = split_path(full_path);
+	Path_req_t path = parse_path(raw_path);
+	auto res_path = resolve_path(raw_path);
+	if (!res_path) { fprintf(stderr, "invalid path\n"); return; }
+	if (!res_path->target) { fprintf(stderr, "no such directory\n"); return; }
+	if (!is_dir(res_path->target.value())) { fprintf(stderr, "not a directory\n"); return; };
 
-	if (path_parts.empty())
+	// you either cd from an absolute path,  or relative
+	
+	std::vector<std::string> curr_parts = (path.absolute) ? std::vector<std::string>{}: m_cwd_parts;
+	for (auto &p : path.path_parts)
 	{
-		m_curr_dir = "/";
-		return;
+		if (p == "..") { if (!curr_parts.empty()) curr_parts.pop_back(); }
+		else { curr_parts.push_back(p); }
 	}
 
-	std::string name;
-	auto target_parent = resolve_parent(path_parts, name);
-	if (!target_parent) { fprintf(stderr, "mkdir: invalid path\n"); return; }
-	// set curr dir or print error0
-	auto new_dir = find_in_dir(target_parent.value(), name);
-	if (new_dir)
-	{ 
-		auto new_dir_meta = read_inode_meta(new_dir.value());
-		if (new_dir_meta)
-		{
-			if (is_dir(new_dir_meta.value()))
-			{
-				m_curr_dir = full_path;
-			}
-			else
-			{
-				fprintf(stderr, "invalid, not a directory\n");
-				return;
-			}
-		}
-	}
-	else{ fprintf(stderr, "cd: path not found\n"); return; }
-
+	m_cwd_parts = std::move(curr_parts);
+	m_cwd_inode = res_path->target.value();
 }
 
-void FS::rmdir(std::string path)
+void FS::rm(std::string raw_path)
 {
-	if (path.empty()) { fprintf(stderr, "missing operand\n"); return; }
-
-	std::string full_path = make_path(path);
-
-	if (full_path == "/") { fprintf(stderr, "cannot delete root\n"); return; }
-	if (full_path == m_curr_dir) { fprintf(stderr, "cannot remove current directory\n"); return; }
+	Path_req_t path = parse_path(raw_path);
+	auto res_path = resolve_path(raw_path);
+	if (!res_path) { fprintf(stderr, "no such directory\n"); return; }
 
 	// refuse if deleting a descendant of current directory
-	if (m_curr_dir.compare(0, full_path.size(), full_path) == 0){ fprintf(stderr, "cannot delete descendent of current directory\n"); return; }
+	bool is_descendant{false};
+	if (path.absolute)
+	{
+		if ((path.path_parts.size() < m_cwd_parts.size()) && (std::equal(path.path_parts.begin(), path.path_parts.end(), m_cwd_parts.begin())))
+		{
+			is_descendant = true;
+		}
+	}
 
-	auto path_parts = split_path(full_path);
-	std::string name;
-	auto target_parent = resolve_parent(path_parts, name);
-	if (!target_parent) { fprintf(stderr, "rmdir: invalid path\n"); }
+	if (is_descendant) { fprintf(stderr, "cannt remove descendant directory\n"); return; }
 
-	if (rm_inode(target_parent.value(), name)) { sync(); };
+	if (!res_path->target) { fprintf(stderr, "target not found\n"); return; }
+	if (res_path->target == 0) { fprintf(stderr, "cannto delete root\n"); return; }
+	if (res_path->target == m_cwd_inode) { fprintf(stderr, "cannot remove current direcory\n"); return; }
+
+	// delete target
+	auto target_meta = read_inode_meta(res_path->target.value());
+
+	if (is_dir(target_meta.value()))
+	{
+		if (rm_dir(res_path->parent, res_path->target.value())) { sync(); };
+	}
+	else
+	{
+		if (rm_file(res_path->parent, res_path->target.value())) { sync(); };
+	}
+
+	return;
 }
 
-void FS::touch(std::string path)
+void FS::touch(std::string raw_path)
 {
-	if (path.empty()) { fprintf(stderr, "touch: missing operand\n"); return; }
-	std::string full_path = make_path(path);
-	auto path_parts = split_path(full_path);
+	if (raw_path.empty()) { fprintf(stderr, "touch: missing operand\n"); return; }
 
-	std::string name;
-	auto target_parent = resolve_parent(path_parts, name);
-	if (!target_parent) { fprintf(stderr, "file: invalid path\n"); return; }
+	auto res_path = resolve_path(raw_path);
+	if (!res_path) { fprintf(stderr, "invalid path\n"); return; }
+	if (res_path->must_b_dir) { fprintf(stderr, "touch: arg can not be a directory\n"); return; }
 
-	if (find_in_dir(target_parent.value(), name))
-	{
-		fprintf(stderr, "touch: file already exists\n");
-		return;
-	}
-	if (!create_file(target_parent.value(), name))
-	{
-		fprintf(stderr, "touch: error creating file\n");
-		return;
-	}
+	if (res_path->target) { fprintf(stderr, "file already exists\n"); return; }
+	if (!create_file(res_path->parent, res_path->name)) { fprintf(stderr, "touch, error creating file\n"); return; }
+
 	sync();
 }
 
@@ -156,52 +127,44 @@ void FS::touch(std::string path)
 /*
 Writes buf into path file
 */
-void FS::write(std::string path, std::string buf)
+void FS::write(std::string raw_path, std::string buf)
 {
-	if (path.empty()) { fprintf(stderr, "touch: missing operand\n"); return; }
-	std::string full_path = make_path(path);
-	auto path_parts = split_path(full_path);
+	auto res_path = resolve_path(raw_path);
+	if (!res_path) { fprintf(stderr, "invalid path\n"); return; }
 
-	std::string name;
-	auto target_parent = resolve_parent(path_parts, name);
-	if (!target_parent) { fprintf(stderr, "write: invalid path\n"); return; }
+	if (!res_path->target) { fprintf(stderr, "write: file does not exist\n"); return; }
+	if (res_path->must_b_dir) { fprintf(stderr, "write: cannot write to a directory\n"); return; }
 
-	auto target = find_in_dir(target_parent.value(), name);
-	if (!target) { fprintf(stderr, "write: file does not exist\n"); return; }
-
-	auto target_meta = read_inode_meta(target.value());
+	auto target_meta = read_inode_meta(res_path->target.value());
 	if (is_dir(target_meta.value())) { fprintf(stderr, "unable to write to directory\n"); return; }
 	// write to file
 
 	std::vector<u8> byte_buf(buf.length());
 
 	std::memcpy(byte_buf.data(), buf.data(), byte_buf.size());
-	write_inode_data(target.value(), byte_buf);
+	write_inode_data(res_path->target.value(), byte_buf);
 
 	sync();
 }
 
-void FS::cat(std::string path)
+void FS::cat(std::string raw_path)
 {
-	if (path.empty()) { fprintf(stderr, "cat: missing operand\n"); return; }
-	std::string full_path = make_path(path);
-	auto path_parts = split_path(full_path);
+	auto res_path = resolve_path(raw_path);
+	if (!res_path) { fprintf(stderr, "cat: invalid path\n"); return; }
 
-	std::string name;
-	auto target_parent = resolve_parent(path_parts, name);
-	if (!target_parent) { fprintf(stderr, "invalid path\n"); }
+	if (!res_path->target) { fprintf(stderr, "file not found\n"); return; }
 
-	auto target = find_in_dir(target_parent.value(), name);
-	if (!target) { fprintf(stderr, "cat: invalid path\n"); return; }
-	auto target_meta = read_inode_meta(target.value());
+	if (res_path->must_b_dir) { fprintf(stderr, "cat: cannot use a directory\n"); return; }
+
+	auto target_meta = read_inode_meta(res_path->target.value());
 	if (!target_meta) { fprintf(stderr, "cat: read metadata\n"); return; }
 
 	auto data = read_inode_data(target_meta.value());
+	if (!data) { fprintf(stderr, "cat: read data\n"); return; }
 
-	std::string disp_data = "";
-	std::memcpy(disp_data.data(), data.value().data(), data.value().size());
-
-	printf("%s\n", disp_data.c_str());
+	std::string disp_data(data->begin(), data->end());
+	fwrite(disp_data.data(), 1, disp_data.size(), stdout);
+	putchar('\n');
 
 	return;
 }

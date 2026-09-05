@@ -4,33 +4,24 @@
 
 std::optional<std::vector<u8>> FS::read_block(const size_t offset)
 {
-	int fd = open(m_name.c_str(), O_RDONLY);
-	if (fd < 0) { perror("read_block: Failed to read block"); return std::nullopt; }
 
 	std::vector<u8> buf(sb.block_size);
-
 	off_t offs = offset * sb.block_size;
-	if (pread(fd, buf.data(), buf.size(), offs) != static_cast<ssize_t>(buf.size()))
+	if (pread(m_fd, buf.data(), buf.size(), offs) != static_cast<ssize_t>(buf.size()))
 	{
 		fprintf(stderr,"read_block: Failed to read block\n");
-		close(fd);
 		return std::nullopt;
 	}
 
-	close(fd);
 	return buf;
 }
+
 
 std::optional<inode_t> FS::read_inode_meta(const u32 inode_num)
 {
 	inode_t new_inode = {};
 
-	int fd = open(m_name.c_str(), O_RDONLY);
-	if (fd < 0) { perror("read_inode_meta: Error opening fs: "); return std::nullopt; }
-
-	ssize_t bytes_read = pread(fd, &new_inode, sizeof(inode_t), (static_cast<off_t>(sb.inode_table_offs) * sb.block_size) + (inode_num * sizeof(inode_t)));
-
-	close(fd);
+	ssize_t bytes_read = pread(m_fd, &new_inode, sizeof(inode_t), (static_cast<off_t>(sb.inode_table_offs) * sb.block_size) + (inode_num * sizeof(inode_t)));
 
 	if (bytes_read < 0 || ((size_t)bytes_read != sizeof(inode_t)))
 	{
@@ -45,10 +36,6 @@ std::optional<inode_t> FS::read_inode_meta(const u32 inode_num)
 std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode_t> inode_meta)
 {
 
-	int fd = open(m_name.c_str(), O_RDONLY);
-	if (fd < 0) { perror("read_inode_data: Error opening fs: "); return std::nullopt; }
-
-
 	u32 inode_data_sz = inode_meta->size;
 	std::vector<u8> buffer(inode_data_sz);
 
@@ -58,64 +45,50 @@ std::optional<std::vector<u8>> FS::read_inode_data(std::optional<inode_t> inode_
 	// read all data until no more one block at a time only direct pointers for now
 	while (inode_data_sz)
 	{
-		if (ptr_index >= sizeof(inode_meta->block_ptrs) / sizeof(inode_meta->block_ptrs[0])) { close(fd); return std::nullopt; }
+		if (ptr_index >= sizeof(inode_meta->block_ptrs) / sizeof(inode_meta->block_ptrs[0])) { return std::nullopt; }
 		// read pointers
 		const u32 ptr_read_sz = (inode_data_sz > sb.block_size) ? sb.block_size : inode_data_sz;
 		
 		// read ptr_read_sz bytes at data pointer offset
 		u32 data_ptr_offs = inode_meta->block_ptrs[ptr_index];
 
-		ssize_t bytes_read = pread(fd, buffer.data() + buffer_pos, ptr_read_sz, static_cast<off_t>(data_ptr_offs) * sb.block_size);
+		ssize_t bytes_read = pread(m_fd, buffer.data() + buffer_pos, ptr_read_sz, static_cast<off_t>(data_ptr_offs) * sb.block_size);
 		buffer_pos += ptr_read_sz;
 		inode_data_sz -= ptr_read_sz;
 
 		if (bytes_read < 0 || ((size_t)bytes_read != ptr_read_sz))
 		{
 			fprintf(stderr, "read_inode_data: error reading data\n");
-			close(fd);
 			return std::nullopt;
 		}
 		ptr_index++;
 	}
-
-	close(fd);
 
 	return buffer;
 }
 
 bool FS::write_block(const size_t offset_blocks, const u8 *src, const int n)
 {
-	int fd = open(m_name.c_str(), O_RDWR);
-	if (fd < 0) { perror("write_block: Failed to write block"); return false; }
-
 	off_t offs = offset_blocks * sb.block_size;
-	if (pwrite(fd, src, n, offs) != static_cast<ssize_t>(n))
+	if (pwrite(m_fd, src, n, offs) != static_cast<ssize_t>(n))
 	{
 		fprintf(stderr, "write_block: failed to write data\n");
-		close(fd);
 		return false;
 	}
-
-	close(fd);
 	return true;
 }
 
 bool FS::write_inode_meta(u32 inode_num, const inode_t &metadata)
 {
-	int fd = open(m_name.c_str(), O_RDWR);
-	if (fd < 0) { perror("write_inode_meta; failed to open file"); return false; }
-
 	off_t offset = static_cast<u64>(sb.inode_table_offs) * sb.block_size + inode_num * sizeof(inode_t);
-	if (pwrite(fd, &metadata, sizeof(metadata), offset) != (ssize_t)sizeof(metadata))
+	if (pwrite(m_fd, &metadata, sizeof(metadata), offset) != (ssize_t)sizeof(metadata))
 	{
 		fprintf(stderr, "write_inode_meta: failed to write metadata\n");
-		close(fd);
 		return false;
 	}
-
-	close(fd);
 	return true;
 }
+
 
 bool FS::write_inode_data(const u32 inode_num, const std::vector<u8> &data)
 {
@@ -162,35 +135,25 @@ bool FS::flush_bitmap(Bitmap& bm, u32 block_offset)
 {
 	std::vector<u8> src = bm.get_bytes();
 
-	int fd = open(m_name.c_str(), O_RDWR);
-	if (fd < 0) { perror("flush_bitmap: open:"); return false; }
 	off_t offs = static_cast<u64>(block_offset) * sb.block_size;
 
-	if (pwrite(fd, src.data(), src.size(), offs) != static_cast<ssize_t>(src.size()))
+	if (pwrite(m_fd, src.data(), src.size(), offs) != static_cast<ssize_t>(src.size()))
 	{
 		fprintf(stderr, "error flushing bitmap\n");
-		close(fd);
 		return false;
 	}
-
-	close(fd);
 	return true;
 }
 
 bool FS::flush_sb()
 {
-	int fd = open(m_name.c_str(), O_RDWR);
-	if (fd < 0) { perror("flush_sb: open:"); return false; }
 	off_t offs{0};
 
-	if (pwrite(fd, &sb, sizeof(sb), offs) != static_cast<ssize_t>(sizeof(sb)))
+	if (pwrite(m_fd, &sb, sizeof(sb), offs) != static_cast<ssize_t>(sizeof(sb)))
 	{
 		fprintf(stderr, "error flushing superblock\n");
-		close(fd);
 		return false;
 	}
-
-	close(fd);
 	return true;
 }
 
@@ -360,6 +323,13 @@ bool FS::is_dir(const inode_t& inode)
 	else { return false; }
 }
 
+bool FS::is_dir(u32 inode)
+{
+	auto meta = read_inode_meta(inode);
+	if (meta.value().type == 1) { return true; }
+	else { return false; }
+}
+
 /* 
  * Create file "file_name" in dir "inode_num"
 */
@@ -417,58 +387,57 @@ std::optional<u32> FS::create_file(u32 inode_num, std::string file_name)
 	return new_inode_num;
 }
 
-// normalizes '.' and '..', folds
-std::string FS::normalize(std::string path)
+Path_req_t FS::parse_path(std::string raw_path)
 {
-	std::string path_norm = "/";
+	Path_req_t r;
+	if (raw_path.empty()) { return r;}
+	r.absolute = raw_path.front() == '/';
+	r.must_be_dir = raw_path.back() == '/';
+
 	size_t pos{0};
-
-	while (pos < path.size())
+	while (pos < raw_path.size())
 	{
-		size_t slash = path.find('/', pos);
-		size_t len = slash - pos;
-		std::string piece = path.substr(pos, len);
-		pos = slash+1;
-		if (piece.empty()) { continue; }
-
-		if (piece == "..")
-		{
-			// skip if called on root
-			if (path_norm.length() == 1) { continue; }
-			// pop las tcharacter until '/' remove trailing '/'
-			path_norm.pop_back();
-			char curr_char = path_norm.back();
-			while (curr_char != '/')
-			{
-				path_norm.pop_back();
-				curr_char = path_norm.back();
-			}
-		}
-		else if (piece == ".")
-		{
-			continue;
-		}
-		else
-		{
-			path_norm = path_norm + piece + '/';
-		}
+		size_t slash = raw_path.find('/', pos);
+		size_t len = (slash == std::string::npos) ? std::string::npos : slash - pos;
+		std::string piece = raw_path.substr(pos, len);
+		pos = (slash == std::string::npos) ? raw_path.size() : slash + 1;
+		if (piece.empty() || piece == ".") { continue; }
+		r.path_parts.push_back(std::move(piece));
 	}
-	return path_norm;
+	return r;
 }
 
-// adds current path to relative path or return absolute path
-std::string FS::make_path(std::string path_name)
+std::optional<Resolved_t> FS::resolve_path(std::string &raw_path)
 {
-	if (path_name.empty()) { return m_curr_dir; }
+	Path_req_t parsed_path = parse_path(raw_path);
 
-	std::string full_path{};
-	// absolute path
-	if (path_name.front() == '/') { full_path = path_name; }
-	// relative path, join to current
-	else { full_path = m_curr_dir + path_name; }
-	if (full_path.back() != '/') { full_path += '/'; }
-	return normalize(full_path);
+	Resolved_t res;
+	res.must_b_dir = parsed_path.must_be_dir;
+
+	u32 cur_inode = (parsed_path.absolute) ? 0 : m_cwd_inode;
+
+	if (parsed_path.path_parts.empty())
+	{
+		res.parent = cur_inode;
+		res.target = cur_inode;
+		return res;
+	}
+
+	// traverse al directories excpet last
+	for (size_t i{}; i < parsed_path.path_parts.size() - 1; ++i)
+	{
+		auto next = find_in_dir(cur_inode, parsed_path.path_parts[i]);
+		if (!next) { fprintf(stderr, "invalid path\n"); return std::nullopt; }
+		if (!is_dir(next.value())) { fprintf(stderr, "not a directory\n"); return std::nullopt; }
+		cur_inode = next.value();
+	}
+	res.parent = cur_inode;
+	res.name = parsed_path.path_parts.back();
+	res.target = find_in_dir(cur_inode, res.name);
+
+	return res;
 }
+
 
 // doesnt zero out block ptrs array bits
 void FS::free_inode_data(inode_t& target_inode)
@@ -484,17 +453,22 @@ void FS::free_inode_data(inode_t& target_inode)
 
 bool FS::free_subtree(u32 inode)
 {
+
 	auto meta = read_inode_meta(inode);
 	if (!meta) { fprintf(stderr, "free_subtree: read meta failed\n"); return false; }
-	auto data = read_inode_data(meta);
-	if (!data) { fprintf(stderr, "free_subtree: read data failed\n"); return false; }
-	auto entries = data_parse_dirs(data.value());
 
-	for (const auto &entry : entries)
+	if (is_dir(meta.value()))
 	{
-		std::string name = entry.name;
-		if (name == "." || name == "..") { continue; }
-		if (!free_subtree(entry.inode_num)) { return false; };
+		auto data = read_inode_data(meta);
+		if (!data) { fprintf(stderr, "free_subtree: read data failed\n"); return false; }
+		auto entries = data_parse_dirs(data.value());
+
+		for (const auto &entry : entries)
+		{
+			std::string name = entry.name;
+			if (name == "." || name == "..") { continue; }
+			if (!free_subtree(entry.inode_num)) { return false; };
+		}
 	}
 
 	free_inode_data(meta.value());
@@ -503,14 +477,9 @@ bool FS::free_subtree(u32 inode)
 	return true;
 }
 
-bool FS::rm_inode(u32 target_parent, std::string rm_name)
+bool FS::rm_dir(const u32 target_parent, const u32 target)
 {
-	if (rm_name == "." || rm_name == "..") { fprintf(stderr, "rm: invalid\n"); return false;}
-
-	auto target_inode = find_in_dir(target_parent, rm_name);
-	if (!target_inode) { fprintf(stderr, "rm_inode: not found\n"); return false; }
-	
-	if (!free_subtree(target_inode.value())) { return false; };
+	if (!free_subtree(target)) { return false; };
 
 	// unlink from parent
 	
@@ -522,11 +491,38 @@ bool FS::rm_inode(u32 target_parent, std::string rm_name)
 
 	for (auto it = parent_entries.begin(); it != parent_entries.end(); ++it)
 	{
-		if (it->name == rm_name) { parent_entries.erase(it); break; }
+		if (it->inode_num== target) { parent_entries.erase(it); break; }
 	}
 	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(entry_t));
 	std::memcpy(parent_entries_buf.data(), parent_entries.data(), parent_entries_buf.size());
-	if (!write_inode_data(target_parent, parent_entries_buf)) { fprintf(stderr, "rm_inode: error writing inode data\n"); };
+	if (!write_inode_data(target_parent, parent_entries_buf)) { fprintf(stderr, "rm_inode: error writing inode data\n"); return false; };
+
+	return true;
+}
+
+bool FS::rm_file(const u32 target_parent, const u32 target)
+{
+
+	auto parent_meta = read_inode_meta(target_parent);
+	if (!parent_meta) { fprintf(stderr, "rm_file: error reading parentm eta\n"); return false; }
+	auto parent_data = read_inode_data(parent_meta);
+	if (!parent_data) { fprintf(stderr, "rm_inode: error reading parent data\n"); return false; }
+	auto parent_entries = data_parse_dirs(parent_data.value());
+
+	for (auto it = parent_entries.begin(); it != parent_entries.end(); ++it)
+	{
+		if (it->inode_num == target) { parent_entries.erase(it); break; }
+	}
+
+	std::vector<u8> parent_entries_buf(parent_entries.size() * sizeof(entry_t));
+	std::memcpy(parent_entries_buf.data(), parent_entries.data(), parent_entries_buf.size());
+	if (!write_inode_data(target_parent, parent_entries_buf)) { fprintf(stderr, "rm_file: error writing inode file\n"); return false; }
+
+	// free inode of 
+	auto meta = read_inode_meta(target);
+	if (!meta) { fprintf(stderr, "error reading inode meta\n"); return false; }
+	free_inode_data(meta.value());
+	free_inode(target);
 
 	return true;
 }
