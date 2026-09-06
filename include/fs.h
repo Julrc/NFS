@@ -92,6 +92,7 @@ private:
 	int m_fd{-1};
 	std::vector<std::string> m_cwd_parts;
 	u32 m_cwd_inode;
+	bool m_running{true};
 
 	Path_req_t parse_path(std::string path);
 	std::optional<Resolved_t> resolve_path(std::string& raw_path);
@@ -120,7 +121,6 @@ private:
 
 	std::optional<u32> find_in_dir(u32 dirnode, const std::string &name);
 	std::vector<std::string> split_path(std::string path);
-	std::optional<u32> resolve_parent(const std::vector<std::string>& parts, std::string& last);
 
 	std::optional<u32> create_dir(u32 inode_num, std::string dir_name);
 	bool is_dir(const Inode_t& inode);
@@ -145,6 +145,8 @@ public:
 
 	static int mkfs(const char* pathname, u64 sz);
 
+	void dispatch(const std::vector<std::string>& args);
+
 	void mkdir(std::string raw_path);
 	void ls(std::string raw_path);
 	void cd(std::string raw_path);
@@ -156,4 +158,5 @@ public:
 	std::string get_curr_dir();
 	void print_superblock();
 	void print_bitmaps();
+	bool is_running() const { return m_running; }
 };

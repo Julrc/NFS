@@ -11,6 +11,7 @@
 #include <sys/types.h>
 
 #include "fs.h"
+#include "fs_error.h"
 
 /*
  make filesystem from requested memory
@@ -116,65 +117,20 @@ int main(int argc, char **argv)
 	std::string tokenize_prompt = fs_name;
 	std::string line;
 
-	while (true)
+	while (File_system.is_running())
 	{
 		if (isatty(STDIN_FILENO)) std::cout << "\033[32m" << tokenize_prompt << ":" << File_system.get_curr_dir() <<   " " << "\033[0m"<< std::flush;
 		if (!std::getline(std::cin, line)) { break; }
 
 		auto args = tokenize(line);
 		if (args.empty()) { break; }
-
-		std::string cmd = args[0];
-		if ((cmd == "exit") || (cmd == "quit") || (cmd == "q")) { break; }
-		else if (cmd == "mkdir")
-		{ 
-			if (args.size() != 2) { continue; }
-			std::string path= args[1];
-			File_system.mkdir(path);
-		}
-		else if (cmd == "ls")
-		{ 
-			// handle "ls" itsself
-			std::string path = "";
-			if (args.size() == 2) { path = args[1]; }
-			File_system.ls(path);
-		}
-		else if (cmd == "cd")
+		try
 		{
-			std::string path = "";
-			if (args.size() == 2) { path = args[1]; }
-			File_system.cd(path);
+			File_system.dispatch(args);
 		}
-		else if (cmd == "touch")
-		{ 
-			if (args.size() != 2) { continue; }
-			std::string path = args[1];
-			File_system.touch(path);
-		}
-		else if (cmd == "rm")
+		catch(const FSError& e)
 		{
-			std::string path = "";
-			if (args.size() == 2) { path = args[1]; }
-			File_system.rm(path);
-		}
-		else if (cmd == "write")
-		{
-			std::string path = "";
-			if (args.size() <= 2) { continue; }
-			path = args[1];
-			std::string buf = "";
-			for (size_t i{2}; i < args.size(); ++i)
-			{
-				if (i > 2) buf += ' ';
-				buf += args[i];
-			}
-			File_system.write(path, buf);
-		}
-		else if (cmd == "cat")
-		{
-			std::string path = "";
-			if (args.size() == 2) { path = args[1]; }
-			File_system.cat(path);
+			fprintf(stderr, "%s\n", e.what());
 		}
 	}
 	return 0;

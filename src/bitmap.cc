@@ -1,4 +1,5 @@
 #include "bitmap.h"
+#include "fs_error.h"
 
 Bitmap::Bitmap(u32 bit_count) : m_bit_count { bit_count }
 {
@@ -43,5 +44,5 @@ std::optional<u32> Bitmap::alloc()
 			}
 		}
 	}
-	return std::nullopt;
+	throw FSError(FSErr::NoSpace, "Could not allocate block\n");
 } 

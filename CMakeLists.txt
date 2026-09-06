@@ -13,6 +13,7 @@ add_executable(file_system
 src/main.cc
 src/fs_commands.cc
 src/fs_core.cc
+src/bitmap.cc
 )
 
 target_include_directories(file_system PRIVATE

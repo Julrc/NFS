@@ -1,13 +1,14 @@
 #include "fs.h"
+#include "fs_error.h"
 
 
 #include <cstring>
 
 //  TODO: 
+//  FIX BITMAP THROW ON ALLOC
+//  throwing as error handling
 //  OFFSET OVERFLOWS WITH u32
 //  Links_count
-//  throwing as error handling
-
 
 int FS::mkfs(const char* pathname, u64 sz)
 {
@@ -189,7 +190,6 @@ FS::FS(std::string name) : m_name{ std::move(name) }, m_cwd_inode{ 0 }
 		fprintf(stderr, "Error reading inode bitmap\n");
 		return;
 	}
-
 	inode_bitmap.set_vector(inode_bitmap_vec, sb.inode_count);
 
 	u32 fs_block_count = sb.sz / sb.block_size;
@@ -210,19 +210,72 @@ FS::~FS()
 	if (m_fd >= 0) { close(m_fd); }
 }
 
+void FS::dispatch(const std::vector<std::string>& args)
+{
+	if (args.empty()) { return; }
+	std::string cmd = args[0];
+	if ((cmd == "exit") || (cmd == "quit") || (cmd == "q")) { m_running = false; return; }
+	else if (cmd == "mkdir")
+	{ 
+		if (args.size() != 2) { return; }
+		std::string path= args[1];
+		mkdir(path);
+	}
+	else if (cmd == "ls")
+	{ 
+		// handle "ls" itsself
+		std::string path = "";
+		if (args.size() == 2) { path = args[1]; }
+		ls(path);
+	}
+	else if (cmd == "cd")
+	{
+		std::string path = "";
+		if (args.size() == 2) { path = args[1]; }
+		cd(path);
+	}
+	else if (cmd == "touch")
+	{ 
+		if (args.size() != 2) { return; }
+		std::string path = args[1];
+		touch(path);
+	}
+	else if (cmd == "rm")
+	{
+		std::string path = "";
+		if (args.size() == 2) { path = args[1]; }
+		rm(path);
+	}
+	else if (cmd == "write")
+	{
+		std::string path = "";
+		if (args.size() <= 2) { return; }
+		path = args[1];
+		std::string buf = "";
+		for (size_t i{2}; i < args.size(); ++i)
+		{
+			if (i > 2) buf += ' ';
+			buf += args[i];
+		}
+		write(path, buf);
+	}
+	else if (cmd == "cat")
+	{
+		std::string path = "";
+		if (args.size() == 2) { path = args[1]; }
+		cat(path);
+	}
+}
 
 void FS::mkdir(std::string raw_path)
 {
 	// parse, directories 
 
 	auto path = resolve_path(raw_path);
-	if (!path) { fprintf(stderr, "invalid path\n"); return; }
-
 	std::string name = path->name;
 	u32 target_parent = path->parent;
 
-	if (find_in_dir(target_parent, name)) { fprintf(stderr, "mkdir: directory already exists\n"); return; }
-	if (!create_dir(target_parent, name)) { fprintf(stderr, "mkdir: error creating directory\n"); return; }
+	create_dir(target_parent, name);
 
 	sync();
 	// ex. /root/etc
@@ -312,14 +365,13 @@ void FS::rm(std::string raw_path)
 
 void FS::touch(std::string raw_path)
 {
-	if (raw_path.empty()) { fprintf(stderr, "touch: missing operand\n"); return; }
+	if (raw_path.empty()) { throw FSError(FSErr::InvalidPath, "touch"); }
 
 	auto res_path = resolve_path(raw_path);
-	if (!res_path) { fprintf(stderr, "invalid path\n"); return; }
-	if (res_path->must_b_dir) { fprintf(stderr, "touch: arg can not be a directory\n"); return; }
+	if (res_path->must_b_dir) { throw FSError(FSErr::MustNotBeDirectory, "touch"); }
 
-	if (res_path->target) { fprintf(stderr, "file already exists\n"); return; }
-	if (!create_file(res_path->parent, res_path->name)) { fprintf(stderr, "touch, error creating file\n"); return; }
+	if (res_path->target) { throw FSError(FSErr::AlreadyExists, "touch"); }
+	create_file(res_path->parent, res_path->name);
 
 	sync();
 }
